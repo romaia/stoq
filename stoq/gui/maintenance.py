@@ -98,6 +98,9 @@ class MaintenanceApp(SearchableAppWindow):
             ("NewOrder", None, _(u"Work order..."),
              group.get("new_order")),
 
+            ("SendOrders", None, _(u"Enviar Ordens...")),
+            ("ReceiveOrders", None, _(u"Receber Ordens...")),
+
             # Search
             ("Products", None, _(u"Products..."),
              group.get("search_products")),
@@ -457,6 +460,12 @@ class MaintenanceApp(SearchableAppWindow):
 
     def on_NewOrder__activate(self, action):
         self._new_order()
+
+    def on_SendOrders__activate(self, action):
+        print 'stub '
+
+    def on_ReceiveOrders__activate(self, action):
+        print 'stub '
 
     def on_Edit__activate(self, action):
         self._edit_order()
