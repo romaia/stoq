@@ -28,6 +28,7 @@ from decimal import Decimal
 import datetime
 import operator
 
+import gobject
 import gtk
 from kiwi.currency import currency
 from kiwi.datatypes import ValidationError
@@ -52,12 +53,14 @@ from stoqlib.lib.formatters import format_quantity
 from stoqlib.lib.translation import locale_sorted
 from stoqlib.gui.base.dialogs import run_dialog
 from stoqlib.gui.base.wizards import WizardEditorStep, BaseWizard
+from stoqlib.gui.base.wizards import BaseWizardStep
 from stoqlib.gui.dialogs.clientdetails import ClientDetailsDialog
 from stoqlib.gui.editors.fiscaleditor import CfopEditor
 from stoqlib.gui.editors.noteeditor import NoteEditor
 from stoqlib.gui.editors.personeditor import ClientEditor
 from stoqlib.gui.editors.saleeditor import SaleQuoteItemEditor
 from stoqlib.gui.printing import print_report
+from stoqlib.gui.slaves.opticslave import OpticSlave
 from stoqlib.gui.wizards.abstractwizard import SellableItemStep
 from stoqlib.gui.wizards.personwizard import run_person_role_dialog
 from stoqlib.reporting.sale import SaleOrderReport
@@ -71,24 +74,13 @@ _ = stoqlib_gettext
 
 
 class StartSaleQuoteStep(WizardEditorStep):
-    gladefile = 'SalesPersonStep'
+    gladefile = 'StartSaleQuoteStep'
     model_type = Sale
     proxy_widgets = ('client', 'salesperson', 'expire_date',
                      'operation_nature', 'client_category')
     cfop_widgets = ('cfop', )
 
     def _setup_widgets(self):
-        # Hide total and subtotal
-        self.table1.hide()
-        self.hbox4.hide()
-        # Hide invoice number details
-        self.invoice_number_label.hide()
-        self.invoice_number.hide()
-
-        # Hide cost center combobox
-        self.cost_center_lbl.hide()
-        self.cost_center.hide()
-
         # Salesperson combo
         salespersons = self.store.find(SalesPerson)
         self.salesperson.prefill(api.for_person_combo(salespersons))
@@ -105,10 +97,6 @@ class StartSaleQuoteStep(WizardEditorStep):
             self.cfop_lbl.hide()
             self.cfop.hide()
             self.create_cfop.hide()
-
-        self.transporter_lbl.hide()
-        self.transporter.hide()
-        self.create_transporter.hide()
 
         self._fill_clients_combo()
         self._fill_clients_category_combo()
@@ -141,6 +129,9 @@ class StartSaleQuoteStep(WizardEditorStep):
         self.force_validation()
 
     def next_step(self):
+        if self.wizard.create_work_orders:
+            return WorkOrderStep(self.store, self.wizard, self, self.model)
+
         return SaleQuoteItemStep(self.wizard, self, self.store, self.model)
 
     def has_previous_step(self):
@@ -200,6 +191,61 @@ class StartSaleQuoteStep(WizardEditorStep):
             self.cfop.select_item_by_data(cfop)
         else:
             self.store.rollback_to_savepoint('before_run_editor_cfop')
+
+    def on_create_payments__toggled(self, widget):
+        self.wizard.create_payments = widget.get_active()
+
+    def on_create_work_orders__toggled(self, widget):
+        self.wizard.create_work_orders = widget.get_active()
+
+
+class NotebookCloseButton(gtk.Button):
+    pass
+gobject.type_register(NotebookCloseButton)
+
+
+class WorkOrderStep(BaseWizardStep):
+    gladefile = 'WorkOrderStep'
+
+    def __init__(self, store, wizard, previous, model):
+        self.model = model
+        BaseWizardStep.__init__(self, store, wizard, previous)
+        self._create_ui()
+
+    def _create_ui(self):
+        new_button = gtk.Button(gtk.STOCK_NEW)
+        new_button.set_use_stock(True)
+        new_button.set_relief(gtk.RELIEF_NONE)
+        new_button.show()
+        new_button.connect('clicked', self._on_new_work_order__clicked)
+
+        self.work_orders_nb.set_action_widget(new_button, gtk.PACK_END)
+
+        slave = OpticSlave(self.store)
+        self.attach_slave('holder', slave)
+
+    def _add_new_wo(self):
+        total_os = self.work_orders_nb.get_n_pages() + 1
+        label = _('OS %d') % total_os
+
+        image = gtk.image_new_from_stock(gtk.STOCK_CLOSE, gtk.ICON_SIZE_MENU)
+        button = NotebookCloseButton()
+        button.set_relief(gtk.RELIEF_NONE)
+        button.add(image)
+
+        hbox = gtk.HBox(spacing=6)
+        hbox.pack_start(gtk.Label(label))
+        hbox.pack_start(button)
+        hbox.show_all()
+
+        slave = OpticSlave(self.store)
+        self.work_orders_nb.append_page(slave.get_toplevel(), hbox)
+
+    def next_step(self):
+        return SaleQuoteItemStep(self.wizard, self, self.store, self.model)
+
+    def _on_new_work_order__clicked(self, button):
+        self._add_new_wo()
 
 
 class SaleQuoteItemStep(SellableItemStep):
@@ -345,7 +391,11 @@ class SaleQuoteItemStep(SellableItemStep):
     #
 
     def has_next_step(self):
-        return False
+        return self.wizard.create_payments
+
+    def next_step(self):
+        if self.wizard.create_payments:
+            pass
 
     #
     # Private API
@@ -411,6 +461,9 @@ class SaleQuoteWizard(BaseWizard):
         if model.status != Sale.STATUS_QUOTE:
             raise ValueError('Invalid sale status. It should '
                              'be STATUS_QUOTE')
+
+        self.create_payments = False
+        self.create_work_orders = True
 
         first_step = StartSaleQuoteStep(store, self, model)
         BaseWizard.__init__(self, store, first_step, model, title=title,
